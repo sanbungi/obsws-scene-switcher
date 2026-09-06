@@ -1,6 +1,6 @@
 [project]
 name = "obs-scene"
-version = "0.1.0"
+version = "0.1.1"
 description = "Cross-platform active-window OBS scene switcher"
 readme = "README.md"
 requires-python = ">=3.14"
