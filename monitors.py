@@ -1,4 +1,5 @@
 """Window monitors. No GUI imports; run() owns resources until stop is set."""
+from collections import deque
 import ctypes
 import os
 from pathlib import Path, PureWindowsPath
@@ -26,6 +27,31 @@ def monitor_kind(platform=None, env=None):
     if env.get('DISPLAY'):
         return 'X11'
     raise RuntimeError('No supported desktop session / DISPLAY')
+
+
+def system_command_env():
+    """Keep PyInstaller libraries out of host journalctl and qdbus processes."""
+    env = os.environ.copy()
+    if not getattr(sys, 'frozen', False):
+        return env
+    original = env.pop('LD_LIBRARY_PATH_ORIG', None)
+    if original is None:
+        env.pop('LD_LIBRARY_PATH', None)
+    else:
+        env['LD_LIBRARY_PATH'] = original
+    bundle = getattr(sys, '_MEIPASS', None)
+    if bundle:
+        root = Path(bundle).resolve()
+        for key in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH'):
+            if key not in env:
+                continue
+            paths = [path for path in env[key].split(os.pathsep)
+                     if not path or not Path(path).resolve().is_relative_to(root)]
+            if paths:
+                env[key] = os.pathsep.join(paths)
+            else:
+                env.pop(key)
+    return env
 
 
 def find_qdbus():
@@ -150,9 +176,11 @@ class KWinMonitor:
         journal = None
         reader = None
         loaded = False
+        command_env = system_command_env()
+        diagnostics = deque(maxlen=10)
         def dbus(path, method, *args):
             return subprocess.run([qdbus, 'org.kde.KWin', path, method, *args],
-                                  capture_output=True, text=True, check=True, timeout=5).stdout.strip()
+                                  capture_output=True, text=True, check=True, timeout=5, env=command_env).stdout.strip()
         with tempfile.TemporaryDirectory(prefix=name) as folder:
             script = Path(folder) / 'monitor.js'
             script.write_text(kwin_script(marker), encoding='utf-8')
@@ -160,7 +188,8 @@ class KWinMonitor:
                 # Include a short history to avoid the journal follower startup race;
                 # the unique marker excludes all old monitor instances.
                 journal = subprocess.Popen(['journalctl', '--user', '-f', '--since', 'now', '-o', 'cat'],
-                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                           errors='replace', env=command_env)
                 lines = queue.Queue()
                 def read_lines():
                     for line in journal.stdout:
@@ -195,10 +224,14 @@ class KWinMonitor:
                             raise RuntimeError('KWin notification test timed out. Enable KWin script debug logging and check the user journal.')
                         continue
                     if line is None:
-                        raise RuntimeError('KWin journal monitor exited unexpectedly')
+                        code = journal.wait(timeout=2)
+                        detail = '\n'.join(diagnostics) or 'No diagnostic output from journalctl'
+                        raise RuntimeError(f'KWin journal monitor exited unexpectedly (journalctl exit {code}):\n{detail}')
                     if marker in line:
                         confirmed = True
                         changed(line.split(marker, 1)[1].strip())
+                    elif line.strip():
+                        diagnostics.append(line.strip()[:2000])
             finally:
                 if journal:
                     journal.terminate()

@@ -215,3 +215,51 @@ def test_kwin_notification_timeout_cleans_up(monkeypatch):
         monitors.KWinMonitor(notification_timeout=0.01).run(threading.Event(), lambda _: None)
     assert done.is_set()
     assert 'org.kde.kwin.Scripting.unloadScript' in calls
+
+
+@pytest.mark.parametrize('original', [None, '/custom/lib'])
+def test_system_command_environment(monkeypatch, original):
+    import monitors
+    monkeypatch.setattr(monitors.sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(monitors.sys, '_MEIPASS', '/opt/app/_internal', raising=False)
+    monkeypatch.setenv('LD_LIBRARY_PATH', '/opt/app/_internal')
+    monkeypatch.delenv('LD_LIBRARY_PATH_ORIG', raising=False)
+    if original is not None:
+        monkeypatch.setenv('LD_LIBRARY_PATH_ORIG', original)
+    monkeypatch.setenv('QT_PLUGIN_PATH', '/opt/app/_internal/PySide6/Qt/plugins')
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus')
+    env = monitors.system_command_env()
+    assert env.get('LD_LIBRARY_PATH') == original
+    assert 'QT_PLUGIN_PATH' not in env
+    assert env['DBUS_SESSION_BUS_ADDRESS'] == 'unix:path=/run/user/1000/bus'
+    assert monitors.os.environ['LD_LIBRARY_PATH'] == '/opt/app/_internal'
+
+
+def test_unfrozen_environment_unchanged(monkeypatch):
+    import monitors
+    monkeypatch.setattr(monitors.sys, 'frozen', False, raising=False)
+    monkeypatch.setenv('LD_LIBRARY_PATH', '/custom/lib')
+    assert monitors.system_command_env() == dict(monitors.os.environ)
+
+
+def test_journal_exit_reports_diagnostics_and_uses_host_environment(monkeypatch):
+    import io
+    import monitors
+    commands = []
+    environment = {'PATH': '/usr/bin'}
+    monkeypatch.setattr(monitors, 'system_command_env', lambda: environment)
+    monkeypatch.setattr(monitors.shutil, 'which', lambda name: name)
+    def popen(command, **kwargs):
+        assert kwargs['env'] == environment
+        return SimpleNamespace(stdout=io.StringIO('journalctl: symbol lookup error: libsystemd.so\n'),
+            terminate=lambda: None, wait=lambda **_: 127)
+    def run(command, **kwargs):
+        assert kwargs['env'] == environment
+        commands.append(command[3])
+        return SimpleNamespace(stdout='7')
+    monkeypatch.setattr(monitors.subprocess, 'Popen', popen)
+    monkeypatch.setattr(monitors.subprocess, 'run', run)
+    with pytest.raises(RuntimeError, match='exit 127') as exc:
+        monitors.KWinMonitor().run(threading.Event(), lambda _: None)
+    assert 'symbol lookup error' in str(exc.value)
+    assert 'org.kde.kwin.Scripting.unloadScript' in commands
