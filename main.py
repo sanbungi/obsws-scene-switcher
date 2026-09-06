@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QDialog, QDialogButton
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QLineEdit, QSpinBox,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QPlainTextEdit, QMessageBox)
+from PySide6.QtWidgets import QCheckBox
 from monitors import monitor_kind
 from switcher import CONFIG_FILE, SwitcherBackend, merge_config, normalize
 
@@ -18,10 +19,11 @@ APP_NAME = 'OBS Scene Switcher'
 
 
 class MappingDialog(QDialog):
-    def __init__(self, parent, window_class='', scene=''):
+    def __init__(self, parent, window_class='', scene='', case_insensitive=True):
         super().__init__(parent)
         self.setWindowTitle('Scene Mapping')
         self.result_mapping = None
+        self.case_insensitive = case_insensitive
         form = QFormLayout(self)
         self.class_edit = QLineEdit(window_class)
         self.scene_edit = QLineEdit(scene)
@@ -33,7 +35,8 @@ class MappingDialog(QDialog):
         form.addRow(buttons)
 
     def ok(self):
-        key, scene = normalize(self.class_edit.text()), self.scene_edit.text().strip()
+        key = normalize(self.class_edit.text(), self.case_insensitive)
+        scene = self.scene_edit.text().strip()
         if not key or not scene:
             QMessageBox.warning(self, APP_NAME, 'Window / App ID と OBS Scene を入力してください。')
             return
@@ -98,6 +101,20 @@ class App(QMainWindow):
         self.safe_edit = QLineEdit()
         safe.addRow('Fallback / Safe scene', self.safe_edit)
         layout.addLayout(safe)
+        matching = QGroupBox('Window / App ID matching')
+        matching_layout = QHBoxLayout(matching)
+        self.case_insensitive_check = QCheckBox('Ignore case')
+        self.case_insensitive_check.setToolTip(
+            'Treat Firefox and firefox as the same ID.'
+        )
+        self.partial_match_check = QCheckBox('Match ID components')
+        self.partial_match_check.setToolTip(
+            'Allow firefox to match firefox_firefox. Exact matches win.'
+        )
+        matching_layout.addWidget(self.case_insensitive_check)
+        matching_layout.addWidget(self.partial_match_check)
+        matching_layout.addStretch()
+        layout.addWidget(matching)
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(['Window / App ID', 'OBS Scene'])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -130,6 +147,8 @@ class App(QMainWindow):
         self.port_edit.setValue(cfg['obs_port'])
         self.password_edit.setText(cfg['obs_password'])
         self.safe_edit.setText(cfg['safe_scene'])
+        self.case_insensitive_check.setChecked(cfg['matching']['case_insensitive'])
+        self.partial_match_check.setChecked(cfg['matching']['partial_match'])
         self.table.setRowCount(0)
         for key, scene in cfg['mappings'].items():
             self.put_mapping(key, scene)
@@ -144,6 +163,10 @@ class App(QMainWindow):
     def get_config_from_ui(self):
         return merge_config(dict(obs_host=self.host_edit.text().strip(), obs_port=self.port_edit.value(),
             obs_password=self.password_edit.text(), safe_scene=self.safe_edit.text().strip(),
+            matching={
+                'case_insensitive': self.case_insensitive_check.isChecked(),
+                'partial_match': self.partial_match_check.isChecked(),
+            },
             mappings={self.table.item(row, 0).text(): self.table.item(row, 1).text() for row in range(self.table.rowCount())}))
 
     def save_config(self):
@@ -165,7 +188,10 @@ class App(QMainWindow):
             return False
 
     def mapping_dialog(self, key='', scene='', row=None):
-        dialog = MappingDialog(self, key, scene)
+        dialog = MappingDialog(
+            self, key, scene,
+            self.case_insensitive_check.isChecked(),
+        )
         if dialog.exec() == QDialog.Accepted:
             self.put_mapping(*dialog.result_mapping, row=row)
 

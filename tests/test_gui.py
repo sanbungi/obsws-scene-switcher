@@ -35,10 +35,16 @@ def test_settings_roundtrip(qtbot, tmp_path):
     app.port_edit.setValue(4456)
     app.password_edit.setText('secret')
     app.safe_edit.setText('BRB')
+    app.case_insensitive_check.setChecked(False)
+    app.partial_match_check.setChecked(False)
     app.table.setRowCount(0)
     app.put_mapping('firefox', 'Browser')
     app.save_config()
     assert json.loads(app.config_file.read_text())['mappings'] == {'firefox': 'Browser'}
+    assert app.config_data['matching'] == {
+        'case_insensitive': False,
+        'partial_match': False,
+    }
     app.config_data = app.load_config()
     app.load_config_into_ui()
     assert app.get_config_from_ui() == app.config_data

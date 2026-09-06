@@ -42,6 +42,7 @@ KWin API・ログ設定の参考: [KDE scripting tutorial](https://develop.kde.o
 1. OBSで **ツール → WebSocket サーバー設定** を有効にします。Safeや切替先のシーンを作成します。
 2. Host / Port / Passwordを設定し、**Test OBS** で接続を確認します。
 3. **Fallback / Safe scene** とマッピングを設定します。**Add / Edit / Delete** で編集し、**Use current** で最後に監視したIDを利用できます。
+   「Ignore case」と「Match ID components」は既定で有効です。前者は大文字・小文字を区別せず、後者は `firefox` を `firefox_firefox` のような区切り付きIDにも一致させます。完全一致するマッピングがある場合はそちらを優先します。
 4. **Save** → **Start**。画面に監視状態、OBS接続状態、ID、シーン、ログを表示します。
 5. **Stop** で停止します。OBSが切断された場合は自動再接続し、**Reconnect** でも接続をやり直せます。
 

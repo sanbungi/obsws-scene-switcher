@@ -33,6 +33,10 @@ DEFAULT_CONFIG = {
     "obs_port": 4455,
     "obs_password": "",
     "safe_scene": "Safe",
+    "matching": {
+        "case_insensitive": True,
+        "partial_match": True,
+    },
     "mappings": {
         "org.kde.konsole": "Konsole",
         "firefox": "Firefox",
@@ -42,10 +46,12 @@ DEFAULT_CONFIG = {
 }
 
 
-def normalize(value: str) -> str:
-    value = value.strip().lower()
+def normalize(value: str, case_insensitive=True) -> str:
+    value = value.strip()
+    if case_insensitive:
+        value = value.lower()
     value = re.sub(r"\s+", "-", value)
-    value = re.sub(r"[^a-z0-9._+-]", "-", value)
+    value = re.sub(r"[^A-Za-z0-9._+-]", "-", value)
     value = re.sub(r"-+", "-", value)
     return value.strip("-")
 
@@ -54,11 +60,23 @@ def merge_config(data: dict | None) -> dict:
     merged = json.loads(json.dumps(DEFAULT_CONFIG))
     if not data:
         return merged
+    matching = data.get("matching")
+    if not isinstance(matching, dict):
+        matching = {}
+    merged["matching"].update({
+        key: bool(matching[key])
+        for key in ("case_insensitive", "partial_match")
+        if key in matching
+    })
     mappings = data.get("mappings")
     merged.update(data)
+    merged["matching"] = {
+        "case_insensitive": bool(matching.get("case_insensitive", True)),
+        "partial_match": bool(matching.get("partial_match", True)),
+    }
     if isinstance(mappings, dict):
         merged["mappings"] = {
-            normalize(str(k)): str(v).strip()
+            normalize(str(k), merged["matching"]["case_insensitive"]): str(v).strip()
             for k, v in mappings.items()
             if str(k).strip() and str(v).strip()
         }
@@ -73,11 +91,23 @@ def merge_config(data: dict | None) -> dict:
     return merged
 
 
-def resolve_scene(window_value: str, mappings: dict, safe_scene: str) -> str:
-    value = normalize(window_value) if window_value else "none"
+def resolve_scene(window_value: str, mappings: dict, safe_scene: str,
+                  case_insensitive=True, partial_match=True) -> str:
+    value = normalize(window_value, case_insensitive) if window_value else "none"
     if not value:
         value = "none"
-    return mappings.get(value, safe_scene)
+    if value in mappings:
+        return mappings[value]
+
+    if partial_match:
+        # Match whole ID components only. For example, "firefox" matches
+        # "firefox_firefox", but "code" does not match "codec".
+        matches = [key for key in mappings if re.search(
+            rf"(?:^|[._+-]){re.escape(key)}(?:$|[._+-])", value
+        )]
+        if matches:
+            return mappings[max(matches, key=len)]
+    return safe_scene
 
 
 def atomic_write(path: Path, text: str):
@@ -232,7 +262,9 @@ class SwitcherBackend:
         if not self.running:
             return
 
-        value = normalize(raw_value)
+        matching = self.config.get("matching", DEFAULT_CONFIG["matching"])
+        case_insensitive = matching["case_insensitive"]
+        value = normalize(raw_value, case_insensitive)
         if not value:
             value = "none"
 
@@ -244,8 +276,17 @@ class SwitcherBackend:
         self.emit("window", value)
 
         cfg = self.config
-        scene = cfg["safe_scene"] if not normalize(raw_value) else resolve_scene(value, cfg["mappings"], cfg["safe_scene"])
+        scene = (
+            cfg["safe_scene"]
+            if not normalize(raw_value, case_insensitive)
+            else resolve_scene(
+                value, cfg["mappings"], cfg["safe_scene"],
+                case_insensitive=case_insensitive,
+                partial_match=matching["partial_match"],
+            )
+        )
         self.log(f"window -> {value}")
+        self.log(f"mapping -> {scene}")
         self.switch_scene(scene)
 
     def handle_window(self, raw_value):
