@@ -8,13 +8,9 @@ on:
 permissions:
   contents: read
 jobs:
-  build:
+  ubuntu:
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-2025]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -32,7 +28,6 @@ jobs:
             exit 1
           fi
       - name: Linux desktop dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb openbox weston x11-utils libegl1 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxkbcommon-x11-0 libxcb-xkb1 libxcb-randr0 libxcb-shape0 libxcb-xfixes0 libdbus-1-3 libfontconfig1
@@ -41,13 +36,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: uv run pytest -q
       - name: X11 integration
-        if: runner.os == 'Linux'
         run: xvfb-run -a sh -c 'openbox & QT_QPA_PLATFORM=xcb OBS_TEST_X11=1 uv run pytest tests/test_x11_integration.py -q'
       - name: Build deb
-        if: runner.os == 'Linux'
         run: uv run python packaging/build.py linux
       - name: Install and launch deb with xcb and Wayland
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y ./dist/*.deb
           xvfb-run -a env QT_QPA_PLATFORM=xcb timeout 30 obs-scene-switcher --smoke-test
@@ -63,15 +55,34 @@ jobs:
           QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-test timeout 30 obs-scene-switcher --smoke-test
           sudo apt-get remove -y obs-scene-switcher
           test -f "$HOME/.config/obs-kwin-switcher/config.json"
+      - name: Checksums
+        run: uv run python packaging/build.py checksums
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-linux
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+  windows:
+    # Run only from Actions > Test and package > Run workflow.
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.28'
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --group dev --group build
       - name: Inno Setup path
-        if: runner.os == 'Windows'
         shell: pwsh
         run: '"C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Append'
       - name: Build Windows executables
-        if: runner.os == 'Windows'
         run: uv run python packaging/build.py windows
       - name: Windows launch and installer smoke tests
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           function Check-Process($exe, $arguments) {
@@ -92,28 +103,26 @@ jobs:
         run: uv run python packaging/build.py checksums
       - uses: actions/upload-artifact@v4
         with:
-          name: packages-${{ runner.os }}
+          name: packages-windows
           path: |
-            dist/*.deb
             dist/*.exe
             dist/SHA256SUMS
           if-no-files-found: error
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: ubuntu
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: packages-*
+          name: packages-linux
           path: artifacts
-      - name: Combine and verify checksums
+      - name: Verify deb checksum
         run: |
           mkdir release
-          cp artifacts/*/*.deb artifacts/*/*.exe release/
-          cat artifacts/*/SHA256SUMS > release/SHA256SUMS
+          cp artifacts/*.deb artifacts/SHA256SUMS release/
           cd release
           sha256sum --check SHA256SUMS
       - name: Publish release
