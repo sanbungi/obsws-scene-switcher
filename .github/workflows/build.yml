@@ -1,14 +1,45 @@
 name: Test and package
+
 on:
   pull_request:
+    paths:
+      - '**.py'
+      - pyproject.toml
+      - uv.lock
+      - 'packaging/**'
+      - 'tests/**'
+      - '.github/workflows/build.yml'
   push:
     branches: [main, master]
     tags: ['v*']
+    paths:
+      - '**.py'
+      - pyproject.toml
+      - uv.lock
+      - 'packaging/**'
+      - 'tests/**'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
+    inputs:
+      target:
+        description: Platform to build
+        required: true
+        default: ubuntu
+        type: choice
+        options:
+          - ubuntu
+          - windows
+          - both
+
 permissions:
   contents: read
+
 jobs:
   ubuntu:
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.target == 'ubuntu' ||
+      inputs.target == 'both'
     timeout-minutes: 30
     runs-on: ubuntu-24.04
     steps:
@@ -18,15 +49,15 @@ jobs:
           version: '0.11.28'
           enable-cache: true
       - run: uv python install 3.14
-      - run: uv sync --locked --group dev --group build
-      - name: Check tag version
+      - name: Apply tag version to build checkout
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          version=$(uv run python packaging/build.py version)
-          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "Tag and pyproject.toml version differ" >&2
-            exit 1
-          fi
+          version="${GITHUB_REF_NAME#v}"
+          test -n "$version"
+          uv version "$version" --no-sync
+          test "$(uv version --short)" = "$version"
+      - run: uv sync --locked --group dev --group build
       - name: Linux desktop dependencies
         run: |
           sudo apt-get update
@@ -64,9 +95,12 @@ jobs:
             dist/*.deb
             dist/SHA256SUMS
           if-no-files-found: error
+
   windows:
-    # Run only from Actions > Test and package > Run workflow.
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.target == 'windows' || inputs.target == 'both'))
     timeout-minutes: 30
     runs-on: windows-2025
     steps:
@@ -76,7 +110,19 @@ jobs:
           version: '0.11.28'
           enable-cache: true
       - run: uv python install 3.14
+      - name: Apply tag version to build checkout
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test -n "$version"
+          uv version "$version" --no-sync
+          test "$(uv version --short)" = "$version"
       - run: uv sync --locked --group dev --group build
+      - name: Unit and Qt tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run pytest -q
       - name: Inno Setup path
         shell: pwsh
         run: '"C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Append'
@@ -108,24 +154,32 @@ jobs:
             dist/*.exe
             dist/SHA256SUMS
           if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: ubuntu
+    needs: [ubuntu, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: packages-linux
+          pattern: packages-*
           path: artifacts
-      - name: Verify deb checksum
+      - name: Combine and verify artifacts
         run: |
           mkdir release
-          cp artifacts/*.deb artifacts/SHA256SUMS release/
+          cp artifacts/packages-linux/*.deb release/
+          cp artifacts/packages-windows/*.exe release/
+          cat artifacts/packages-linux/SHA256SUMS artifacts/packages-windows/SHA256SUMS > release/SHA256SUMS
           cd release
           sha256sum --check SHA256SUMS
-      - name: Publish release
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+          fi

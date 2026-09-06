@@ -80,7 +80,7 @@ WindowsではInno Setup 6の `iscc` をPATHに追加し、`uv run python packagi
 
 ## CIとリリース確認
 
-GitHub ActionsはPR、main / masterへのpush、手動実行でテスト・ビルドし、成果物を保存します。Ubuntu 24.04とWindows runnerで次を確認します。
+GitHub ActionsはPython、依存、パッケージ、テスト、ワークフローの変更があるPRとmain / masterへのpushでUbuntuのテストとdebビルドを行い、成果物を保存します。手動実行では `ubuntu`、`windows`、`both` を選択できます。通常の自動実行ではWindows runnerを使用しません。
 
 - 共通処理・OS判定・取得失敗・監視異常・停止 / 再起動のテスト
 - pytest-qtによる設定、マッピング、状態表示、エラー、非同期終了のテスト
@@ -88,7 +88,7 @@ GitHub ActionsはPR、main / masterへのpush、手動実行でテスト・ビ�
 - debのインストール、xcbとheadless WestonのWaylandでパッケージ済みGUIの起動、削除、設定保持
 - Windows単体exeの起動、サイレントインストール、更新、起動、アンインストール、設定保持
 
-`vX.Y.Z`タグはpyproject.tomlのバージョン一致と両OSの全ジョブ成功後、GitHub Releasesにdeb・単体exe・セットアップexe・SHA-256を公開します。
+`vX.Y.Z`タグでは、CI内の一時チェックアウトにあるpyproject.tomlとuv.lockのバージョンをタグの `X.Y.Z` に更新し、UbuntuとWindowsを両方ビルドします。両方の成功後、GitHub Releasesにdeb・単体exe・セットアップexe・SHA-256を公開します。同じタグのReleaseがすでにある場合は成果物を上書きします。CIからリポジトリへバージョン変更をpushしないため、タグが指すソースは変わりません。
 
 リリース前に実機で以下を確認してください。CIのheadless WaylandテストはKWin監視の実機検証を代替しません。
 
