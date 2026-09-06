@@ -106,7 +106,7 @@ class App(tk.Tk):
 
         self.title(APP_NAME)
         self.geometry("760x650")
-        self.minsize(650, 550)
+        self.minsize(650, 850)
 
         self.event_queue = queue.Queue()
         self.backend = SwitcherBackend(self.event_queue)
