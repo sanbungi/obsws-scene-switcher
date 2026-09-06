@@ -1,17 +1,22 @@
 [project]
 name = "obs-scene"
 version = "0.1.0"
-description = "KWin active-window OBS scene switcher"
+description = "Cross-platform active-window OBS scene switcher"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "obsws-python>=1.8.0",
+    "PySide6>=6.10.2",
+    "python-xlib>=0.33; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-qt>=4.5",
 ]
+
+build = ["pyinstaller>=6.18", "pillow>=12"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

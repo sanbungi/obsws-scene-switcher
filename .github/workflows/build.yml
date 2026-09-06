@@ -1,0 +1,122 @@
+name: Test and package
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.28'
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --group dev --group build
+      - name: Check tag version
+        shell: bash
+        run: |
+          version=$(uv run python packaging/build.py version)
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag and pyproject.toml version differ" >&2
+            exit 1
+          fi
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb openbox weston x11-utils libegl1 libgl1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxkbcommon-x11-0 libxcb-xkb1 libxcb-randr0 libxcb-shape0 libxcb-xfixes0 libdbus-1-3 libfontconfig1
+      - name: Unit and Qt tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run pytest -q
+      - name: X11 integration
+        if: runner.os == 'Linux'
+        run: xvfb-run -a sh -c 'openbox & QT_QPA_PLATFORM=xcb OBS_TEST_X11=1 uv run pytest tests/test_x11_integration.py -q'
+      - name: Build deb
+        if: runner.os == 'Linux'
+        run: uv run python packaging/build.py linux
+      - name: Install and launch deb with xcb and Wayland
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          xvfb-run -a env QT_QPA_PLATFORM=xcb timeout 30 obs-scene-switcher --smoke-test
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          chmod 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless-backend.so --socket=wayland-test --idle-time=0 --log="$RUNNER_TEMP/weston.log" &
+          weston_pid=$!
+          trap 'kill "$weston_pid" || true' EXIT
+          for i in $(seq 1 50); do
+            test ! -S "$XDG_RUNTIME_DIR/wayland-test" || break
+            sleep .1
+          done
+          QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-test timeout 30 obs-scene-switcher --smoke-test
+          sudo apt-get remove -y obs-scene-switcher
+          test -f "$HOME/.config/obs-kwin-switcher/config.json"
+      - name: Inno Setup path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Append'
+      - name: Build Windows executables
+        if: runner.os == 'Windows'
+        run: uv run python packaging/build.py windows
+      - name: Windows launch and installer smoke tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          function Check-Process($exe, $arguments) {
+            $process = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru
+            if (-not $process.WaitForExit(60000)) { $process.Kill(); throw "Timed out: $exe" }
+            if ($process.ExitCode -ne 0) { throw "Failed: $exe ($($process.ExitCode))" }
+          }
+          $portable = Get-ChildItem dist/*-windows-x64.exe | Select-Object -First 1
+          Check-Process $portable.FullName '--smoke-test'
+          $installer = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
+          Check-Process $installer.FullName '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          $app = "$env:LOCALAPPDATA\Programs\OBS Scene Switcher"
+          Check-Process "$app\obs-scene-switcher.exe" '--smoke-test'
+          Check-Process $installer.FullName '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          Check-Process "$app\unins000.exe" '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+          if (!(Test-Path "$env:APPDATA\obs-scene-switcher\config.json")) { throw 'Settings were removed' }
+      - name: Checksums
+        run: uv run python packaging/build.py checksums
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ runner.os }}
+          path: |
+            dist/*.deb
+            dist/*.exe
+            dist/SHA256SUMS
+          if-no-files-found: error
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: artifacts
+      - name: Combine and verify checksums
+        run: |
+          mkdir release
+          cp artifacts/*/*.deb artifacts/*/*.exe release/
+          cat artifacts/*/SHA256SUMS > release/SHA256SUMS
+          cd release
+          sha256sum --check SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

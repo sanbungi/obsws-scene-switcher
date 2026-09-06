@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OBS Scene Switcher
+Comment=Switch OBS scenes with the active window
+Exec=obs-scene-switcher
+Icon=obs-scene-switcher
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=true
