@@ -2,7 +2,15 @@
 
 アクティブウィンドウに合わせてOBSのProgramシーンを切り替える、PySide6 / Qt Widgetsアプリです。
 
+現在アクティブなウインドウと、その時に表示したいシーンを記述すると画面が自動的に切り替わります
+
+OBSにはWeb Socket経由で接続
+
+<img width="1143" height="1118" alt="image" src="https://github.com/user-attachments/assets/8303216d-e3cc-4f87-b292-f1842c933ff0" />
+<img width="1000" height="938" alt="image" src="https://github.com/user-attachments/assets/8ee0f8d5-1f4c-4bec-bfb8-048690d3947f" />
+
 ## 対応環境
+
 
 | OS / セッション | 監視方式・Window / App ID |
 |---|---|
